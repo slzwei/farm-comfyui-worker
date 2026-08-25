@@ -1,0 +1,32 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect image and run handler boot sequence
+        run: |
+          set -x
+          docker pull ghcr.io/slzwei/farm-comfyui:v1
+          docker image inspect ghcr.io/slzwei/farm-comfyui:v1 --format 'ENTRYPOINT={{.Config.Entrypoint}} CMD={{.Config.Cmd}} ENV={{.Config.Env}}'
+          echo "=== file layout ==="
+          docker run --rm ghcr.io/slzwei/farm-comfyui:v1 bash -c "ls -la /app /app/scripts /app/workflows && which python && python --version && pip show runpod | head -3"
+          echo "=== handler import ==="
+          docker run --rm ghcr.io/slzwei/farm-comfyui:v1 bash -c "cd /app && python -c 'import handler; print(\"HANDLER_IMPORT_OK\")'"
+          echo "=== handler serve attempt (10s, no RunPod env — expect SDK local loop or clear error) ==="
+          docker run --rm ghcr.io/slzwei/farm-comfyui:v1 bash -c "cd /app && timeout 10 python -u handler.py; echo HANDLER_EXIT=\$?"
+          echo "=== handler serve with test_input (SDK should run job once and exit) ==="
+          docker run --rm ghcr.io/slzwei/farm-comfyui:v1 bash -c "cd /app && echo '{\"input\": {\"probe\": true}}' > test_input.json && timeout 30 python -u handler.py; echo HANDLER_EXIT=\$?"
