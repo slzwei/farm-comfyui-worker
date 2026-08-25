@@ -18,11 +18,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3.11 python3.11-venv python3.11-dev \
+      python3.10 python3.10-venv python3.10-dev \
       git curl ffmpeg libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3.11 -m venv /opt/venv
+RUN python3.10 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
 # Torch pinned to the CUDA 12.4 wheel index; keep in sync with the base image.
