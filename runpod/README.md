@@ -55,6 +55,13 @@ No local Docker? `.github/workflows/build-worker.yml` builds and pushes
 `ghcr.io/<owner>/farm-comfyui-worker:v1` on every push touching `runpod/` or
 `workflows/` (or via workflow_dispatch).
 
+**Production note (current deployment):** GHCR packages created from a
+private repo are private, and RunPod pulls anonymously — so the deployed
+image is built by the PUBLIC mirror repo `slzwei/farm-comfyui-worker`
+(worker build inputs only, no farm code/secrets) as
+`ghcr.io/slzwei/farm-comfyui:v1`. After changing `runpod/` or `workflows/`,
+run `bash scripts/sync-worker-mirror.sh` to propagate + rebuild.
+
 ## Models: network volume (chosen strategy)
 
 Wan 2.2 TI2V-5B needs ~18GB of weights — too big to bake into the image
