@@ -1,0 +1,4 @@
+# Worker-side dependencies (ComfyUI's own requirements are installed from its
+# pinned checkout in the Dockerfile).
+runpod~=1.7
+requests~=2.32
