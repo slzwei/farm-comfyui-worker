@@ -11,8 +11,8 @@ in `docs/RUNPOD_SETUP.md`; this file covers the worker itself.
 2. Loads the bundled workflow for `workflow_id` — **never** a caller-supplied
    graph — and refuses version mismatches. Hash drift vs the farm's copy is
    logged and reported in metadata.
-3. Snaps dimensions to the model grid (÷32) and duration to Wan's frame
-   quantum (4k+1, max 121 frames ≈ 5s @ 24fps).
+3. Snaps dimensions to the model grid (÷32) and duration to H3's frame
+   quantum (17k+5, max 3600 frames — a full 18s brief renders in one pass).
 4. Downloads the product image (size-capped, sha256'd) into ComfyUI's input
    dir under a job-scoped name.
 5. Injects semantic inputs via the workflow's `_meta.injection` map.
@@ -63,23 +63,30 @@ No local Docker? `.github/workflows/build-worker.yml` builds and pushes
 private repo are private, and RunPod pulls anonymously — so the deployed
 image is built by the PUBLIC mirror repo `slzwei/farm-comfyui-worker`
 (worker build inputs only, no farm code/secrets) as
-`ghcr.io/slzwei/farm-comfyui:v1`. After changing `runpod/` or `workflows/`,
+`ghcr.io/slzwei/farm-comfyui:v2`. After changing `runpod/` or `workflows/`,
 run `bash scripts/sync-worker-mirror.sh` to propagate + rebuild.
 
 ## Models: network volume (chosen strategy)
 
-Wan 2.2 TI2V-5B needs ~18GB of weights — too big to bake into the image
-(every code tweak would re-push 27GB; registry cold pulls would dominate
-startup) and far too big to download per invocation. A RunPod **network
-volume** mounted at `/runpod-volume` gives one-time download, fast warm
-loads, and lets the image stay slim.
+MiniMax H3 needs ~44.4GB of weights — far too big to bake into the image or
+fetch per invocation. A RunPod **network volume** mounted at
+`/runpod-volume` gives one-time download, fast warm loads, and keeps the
+image slim.
 
 ```
 /runpod-volume/models/
-  diffusion_models/wan2.2_ti2v_5B_fp16.safetensors   (~10 GB)
-  text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors (~6.7 GB)
-  vae/wan2.2_vae.safetensors                          (~1.4 GB)
+  diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors  (20.97 GB)
+  text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors         (15.69 GB)
+  vae/minimax_h3_video_vae_fp16.safetensors                          ( 5.21 GB)
+  vae/minimax_h3_audio_vae_fp32.safetensors                          ( 0.61 GB)
+  loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors    ( 1.96 GB)
 ```
+
+Every file is verified against its exact byte size — a truncated multi-GB
+checkpoint otherwise loads as noise or crashes ComfyUI.
+
+Licence: MiniMax H3 Community Licence — commercial use permitted under
+$20M revenue, **attribution required**.
 
 Populate it either way:
 
@@ -94,11 +101,12 @@ Populate it either way:
 
 ## Endpoint settings
 
-- GPU: 24GB+ (L40S / 4090 / A40 class). fp16 5B fits comfortably.
-- Workers: min 0, max 1 to start (scale after cost calibration).
-- Network volume: attach the model volume.
-- Execution timeout: ≥ 1800s (first render on a cold worker loads ~18GB of
-  weights from the volume).
+- GPU: **Blackwell RTX PRO 6000 (96GB) preferred** — H3 keeps ~37GB of
+  weights resident, so 48GB cards leave little headroom for video
+  activations. Any Blackwell card REQUIRES the cu128 image above.
+- Workers: min 0, max 2 to start (scale after cost calibration).
+- Network volume: attach the model volume (≥ 60GB for the H3 set).
+- Execution timeout: ≥ 2700s (a cold worker loads ~44GB from the volume).
 - Optional env overrides: `COMFY_TIMEOUT_SECONDS` (default 1500),
   `MAX_ASSET_BYTES`, `MAX_BASE64_BYTES`, `COMFY_EXTRA_ARGS`.
 

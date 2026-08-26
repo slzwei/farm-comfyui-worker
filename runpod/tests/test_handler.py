@@ -285,3 +285,40 @@ class TestMisc(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestModelManifest(unittest.TestCase):
+    """The size floors in ensure_models.sh must equal the real file sizes.
+
+    A floor even slightly ABOVE the true size makes every worker treat a
+    complete download as truncated, wipe it, re-fetch tens of GB and die
+    (observed 26 Aug 2026). Network-free: parses the script and compares
+    against sizes captured from the HuggingFace tree API.
+    """
+
+    # Exact bytes from:
+    #   https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main/<dir>
+    #   https://huggingface.co/api/models/lightx2v/Minimax-h3-Turbo/tree/main
+    EXPECTED = {
+        "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors": 20970379616,
+        "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": 15687142551,
+        "vae/minimax_h3_video_vae_fp16.safetensors": 5207808496,
+        "vae/minimax_h3_audio_vae_fp32.safetensors": 605254808,
+        "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors": 1956193000,
+    }
+
+    def test_size_floors_match_real_file_sizes(self):
+        import re
+        script = os.path.join(REPO_ROOT, "runpod", "scripts", "ensure_models.sh")
+        with open(script) as f:
+            body = f.read()
+        for path, size in self.EXPECTED.items():
+            m = re.search(rf'"{re.escape(path)}\|(\d+)"', body)
+            self.assertIsNotNone(m, f"{path} missing from ensure_models.sh FILES")
+            baked = int(m.group(1))
+            self.assertLessEqual(
+                baked, size,
+                f"{path}: floor {baked} exceeds real size {size} — every worker "
+                f"would reject a complete download and re-fetch forever",
+            )
+            self.assertEqual(baked, size, f"{path}: floor should be the exact size")

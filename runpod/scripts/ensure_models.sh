@@ -21,15 +21,19 @@ MARKER="${VOLUME_ROOT}/models/.provisioned-minimax-h3-v1"
 STALE_SECONDS="${MODEL_LOCK_STALE_SECONDS:-180}"
 WAIT_CAP_SECONDS="${MODEL_LOCK_WAIT_CAP_SECONDS:-1200}"
 
-# MiniMax H3 FL2VA (image-to-video) set — ~44.4GB total. Sizes are the exact
-# byte counts from the HuggingFace tree API; a short file means a truncated
-# download and is re-fetched.
+# MiniMax H3 FL2VA (image-to-video) set — 44.43GB total.
+#
+# These are EXACT byte counts from the HuggingFace tree API:
+#   curl -s https://huggingface.co/api/models/Comfy-Org/MiniMax-H3/tree/main/<dir>
+# NEVER hand-round them. A floor even 1MB above the true size makes every
+# worker treat a perfect download as truncated, wipe it, re-fetch 44GB and
+# die — which is exactly what happened on 26 Aug.
 FILES=(
-  "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors|20971520000"
-  "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors|15690000000"
-  "vae/minimax_h3_video_vae_fp16.safetensors|5210000000"
-  "vae/minimax_h3_audio_vae_fp32.safetensors|610000000"
-  "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors|1960000000"
+  "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors|20970379616"
+  "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors|15687142551"
+  "vae/minimax_h3_video_vae_fp16.safetensors|5207808496"
+  "vae/minimax_h3_audio_vae_fp32.safetensors|605254808"
+  "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors|1956193000"
 )
 
 # The turbo LoRA lives in a different repo than the base model files.
