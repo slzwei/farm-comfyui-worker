@@ -490,16 +490,23 @@ def handler(event):
         if seed is None:
             seed = random.randrange(2**31)
 
-        # Source assets → ComfyUI input dir.
+        # Source assets → ComfyUI input dir. The product is required; a
+        # "reference" asset (locked creator identity for UGC workflows) is
+        # optional and only injected when the workflow maps it.
         t0 = time.time()
         product = next(a for a in inp["source_assets"] if a["role"] == "product_image")
         asset = download_asset(product["url"], COMFY_INPUT_DIR, job_id)
         cleanup_paths.append(asset["path"])
+        creator_asset = None
+        creator = next((a for a in inp["source_assets"] if a["role"] == "reference"), None)
+        if creator:
+            creator_asset = download_asset(creator["url"], COMFY_INPUT_DIR, job_id + "-ref")
+            cleanup_paths.append(creator_asset["path"])
+            log("creator identity reference attached", job_id=job_id,
+                sha256=creator_asset["sha256"][:16])
         timings["asset_download_seconds"] = round(time.time() - t0, 3)
 
-        graph = inject_workflow_inputs(
-            workflow_doc,
-            {
+        injections = {
                 "product_image": asset["filename"],
                 "prompt": inp["prompt"],
                 "negative_prompt": inp.get("negative_prompt", ""),
@@ -508,8 +515,10 @@ def handler(event):
                 "height": height,
                 "frame_count": frames,
                 "fps": fps,
-            },
-        )
+        }
+        if creator_asset:
+            injections["creator_image"] = creator_asset["filename"]
+        graph = inject_workflow_inputs(workflow_doc, injections)
 
         t0 = time.time()
         prompt_id = submit_prompt(graph)
@@ -547,7 +556,8 @@ def handler(event):
             },
             "gpu_name": gpu_name(),
             "comfyui_version": (stats.get("system") or {}).get("comfyui_version"),
-            "input_assets": [{"role": "product_image", "sha256": asset["sha256"]}],
+            "input_assets": [{"role": "product_image", "sha256": asset["sha256"]}]
+                + ([{"role": "reference", "sha256": creator_asset["sha256"]}] if creator_asset else []),
             "timings": timings,
             **extract_model_info(graph),
         }
