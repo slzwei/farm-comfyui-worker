@@ -29,9 +29,17 @@ RUN python3.10 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
 # Torch from the CUDA 12.8 wheel index — the first builds carrying sm_120
-# (Blackwell) kernels. Pinned for reproducibility, falling back to the
-# current cu128 stable if that exact version is ever pulled from the index.
-RUN pip install torch==2.8.0 torchvision torchaudio \
+# (Blackwell) kernels.
+#
+# All THREE versions must be pinned as a matched set. Pinning torch alone
+# lets pip resolve a torchaudio built against a different torch, and the ABI
+# mismatch kills ComfyUI at import with
+#   _torchaudio.abi3.so: undefined symbol: torch_library_impl
+# ComfyUI imports torchaudio unconditionally (audio VAE), so this is fatal,
+# not optional. torch 2.8.0 <-> torchvision 0.23.0 <-> torchaudio 2.8.0.
+# The fallback installs all three unpinned TOGETHER so pip still resolves a
+# self-consistent set.
+RUN pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
       --index-url https://download.pytorch.org/whl/cu128 \
  || pip install torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu128
