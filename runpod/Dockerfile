@@ -11,7 +11,10 @@
 # and extra_model_paths.yaml). Image stays ~9GB; cold start = container pull
 # + model load from volume, not an 18GB download per worker.
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# CUDA 12.8+ is REQUIRED for Blackwell (RTX PRO 6000 / RTX 50xx, sm_120).
+# torch cu124 builds ship no sm_120 kernels and fail at runtime with
+# "no kernel image is available for execution on the device".
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -25,9 +28,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3.10 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-# Torch pinned to the CUDA 12.4 wheel index; keep in sync with the base image.
-RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-      --index-url https://download.pytorch.org/whl/cu124
+# Torch from the CUDA 12.8 wheel index — the first builds carrying sm_120
+# (Blackwell) kernels. Pinned for reproducibility, falling back to the
+# current cu128 stable if that exact version is ever pulled from the index.
+RUN pip install torch==2.8.0 torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu128 \
+ || pip install torch torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu128
 
 # ComfyUI pinned by tag. MiniMax H3 nodes (MiniMaxH3ImageToVideo,
 # VAEDecodeAudio, EmptyMiniMaxH3LatentAV) require >= v0.30.0; bump

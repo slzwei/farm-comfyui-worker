@@ -33,11 +33,15 @@ Error codes: `INPUT_INVALID`, `WORKFLOW_MISMATCH`, `ASSET_DOWNLOAD_FAILED`,
 
 ## Image
 
-- Base: `nvidia/cuda:12.4.1-runtime-ubuntu22.04`, Python 3.11 venv,
-  torch 2.5.1+cu124, ffmpeg.
-- ComfyUI pinned via `--build-arg COMFYUI_VERSION=v0.3.49` (needs ≥ v0.3.45
-  for Wan 2.2 + core CreateVideo/SaveVideo nodes; verify the tag exists
-  before building and bump deliberately).
+- Base: `nvidia/cuda:12.8.1-runtime-ubuntu22.04`, Python 3.10 venv,
+  torch 2.8.0+cu128, aria2, ffmpeg.
+- **CUDA 12.8+ is mandatory for Blackwell** (RTX PRO 6000, RTX 50xx —
+  sm_120). cu124 wheels carry no sm_120 kernels and die at runtime with
+  "no kernel image is available for execution on the device". The same
+  applies to the local RTX PRO 6000 box later.
+- ComfyUI pinned via `--build-arg COMFYUI_VERSION=v0.34.0` (MiniMax H3
+  nodes need ≥ v0.30.0; verify the tag exists before building and bump
+  deliberately).
 - **No custom nodes required** — the workflow uses core nodes only.
 - Workflows are copied from the repo's `workflows/` at build time (single
   source of truth). Rebuild the image whenever a workflow file changes.
