@@ -13,17 +13,32 @@
 set -euo pipefail
 
 VOLUME_ROOT="${VOLUME_ROOT:-/runpod-volume}"
-BASE_URL="https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files"
+BASE_URL="https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main"
+TURBO_URL="https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main"
 LOCK_DIR="${VOLUME_ROOT}/.model-download-lock"
-MARKER="${VOLUME_ROOT}/models/.provisioned"
+# Marker is version-stamped: switching model sets invalidates it automatically.
+MARKER="${VOLUME_ROOT}/models/.provisioned-minimax-h3-v1"
 STALE_SECONDS="${MODEL_LOCK_STALE_SECONDS:-180}"
 WAIT_CAP_SECONDS="${MODEL_LOCK_WAIT_CAP_SECONDS:-1200}"
 
+# MiniMax H3 FL2VA (image-to-video) set — ~44.4GB total. Sizes are the exact
+# byte counts from the HuggingFace tree API; a short file means a truncated
+# download and is re-fetched.
 FILES=(
-  "diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
-  "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
-  "vae/wan2.2_vae.safetensors"
+  "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors|20971520000"
+  "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors|15690000000"
+  "vae/minimax_h3_video_vae_fp16.safetensors|5210000000"
+  "vae/minimax_h3_audio_vae_fp32.safetensors|610000000"
+  "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors|1960000000"
 )
+
+# The turbo LoRA lives in a different repo than the base model files.
+url_for() {
+  case "$1" in
+    loras/*) echo "${TURBO_URL}/$(basename "$1")" ;;
+    *) echo "${BASE_URL}/$1" ;;
+  esac
+}
 
 if [ ! -d "${VOLUME_ROOT}" ]; then
   echo "[models] FATAL: no network volume mounted at ${VOLUME_ROOT} — attach the model volume to the endpoint (runpod/README.md)" >&2
@@ -31,12 +46,15 @@ if [ ! -d "${VOLUME_ROOT}" ]; then
 fi
 
 all_present() {
-  for rel in "${FILES[@]}"; do
+  for entry in "${FILES[@]}"; do
+    local rel="${entry%%|*}" min="${entry##*|}"
     local path="${VOLUME_ROOT}/models/${rel}"
     [ -f "${path}" ] || return 1
     local size
     size=$(stat -c%s "${path}" 2>/dev/null || echo 0)
-    [ "${size}" -gt 1000000000 ] || return 1
+    # Per-file floor: a truncated multi-GB checkpoint loads as noise or
+    # crashes ComfyUI, so each file is checked against its own real size.
+    [ "${size}" -ge "${min}" ] || return 1
   done
   return 0
 }
@@ -84,15 +102,25 @@ done
 HEARTBEAT_PID=$!
 trap 'kill "${HEARTBEAT_PID}" 2>/dev/null || true; rm -rf "${LOCK_DIR}"' EXIT
 
-for rel in "${FILES[@]}"; do
+for entry in "${FILES[@]}"; do
+  rel="${entry%%|*}"
+  min="${entry##*|}"
   dest="${VOLUME_ROOT}/models/${rel}"
-  if [ -f "${dest}" ] && [ "$(stat -c%s "${dest}" 2>/dev/null || echo 0)" -gt 1000000000 ]; then
+  if [ -f "${dest}" ] && [ "$(stat -c%s "${dest}" 2>/dev/null || echo 0)" -ge "${min}" ]; then
     echo "[models] have ${rel}"
     continue
   fi
   mkdir -p "$(dirname "${dest}")"
-  echo "[models] downloading ${rel}"
-  curl -L -C - --fail --retry 5 --retry-delay 5 -o "${dest}" "${BASE_URL}/${rel}"
+  echo "[models] downloading ${rel} (~$((min / 1000000000))GB)"
+  # aria2 (8 parallel segments) when available — a single stream from
+  # HuggingFace is throttled and 44GB takes hours; curl -C - is the fallback.
+  if command -v aria2c >/dev/null 2>&1; then
+    aria2c -x8 -s8 -k4M --file-allocation=none --console-log-level=warn -c \
+      -d "$(dirname "${dest}")" -o "$(basename "${dest}")" "$(url_for "${rel}")" \
+      || curl -L -C - --fail --retry 5 --retry-delay 5 -o "${dest}" "$(url_for "${rel}")"
+  else
+    curl -L -C - --fail --retry 5 --retry-delay 5 -o "${dest}" "$(url_for "${rel}")"
+  fi
 done
 
 all_present || { echo "[models] download finished but verification failed" >&2; exit 1; }

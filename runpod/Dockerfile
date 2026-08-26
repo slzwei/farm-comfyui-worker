@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3.10 python3.10-venv python3.10-dev \
-      git curl ffmpeg libgl1 libglib2.0-0 \
+      git curl aria2 ffmpeg libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3.10 -m venv /opt/venv
@@ -29,9 +29,10 @@ ENV PATH=/opt/venv/bin:$PATH
 RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
       --index-url https://download.pytorch.org/whl/cu124
 
-# ComfyUI pinned by tag. Any release >= v0.3.45 has Wan 2.2 + core
-# CreateVideo/SaveVideo nodes; bump deliberately and re-verify.
-ARG COMFYUI_VERSION=v0.3.49
+# ComfyUI pinned by tag. MiniMax H3 nodes (MiniMaxH3ImageToVideo,
+# VAEDecodeAudio, EmptyMiniMaxH3LatentAV) require >= v0.30.0; bump
+# deliberately and re-verify.
+ARG COMFYUI_VERSION=v0.34.0
 RUN git clone --branch ${COMFYUI_VERSION} --depth 1 \
       https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI \
     && pip install -r /app/ComfyUI/requirements.txt

@@ -1,133 +1,170 @@
 {
   "_meta": {
     "workflowId": "product-demo-v1",
-    "version": "1",
+    "version": "2",
     "status": "ACTIVE",
-    "description": "Image-to-video product demo on Wan 2.2 TI2V-5B (ComfyUI API format). The product reference image drives an ~5s portrait clip guided by the brief-derived prompt. The RunPod worker bundles this file, injects the semantic inputs below, and never accepts graphs from callers. Node ids are an implementation detail of this file + the worker — nothing farm-side may reference them.",
+    "description": "Image-to-video product demo on MiniMax H3 (open weights, ComfyUI API format). The product reference image is the first frame; the brief-derived prompt drives motion, and H3 generates native stereo audio in the same pass. v2 replaces the Wan 2.2 TI2V-5B graph of v1: H3 removes the ~5s ceiling (up to 3600 frames) and adds audio, which Wan could not do. Node ids are an implementation detail of this file plus the worker; nothing farm-side may reference them.",
     "model": {
-      "family": "wan2.2",
-      "variant": "ti2v-5B",
-      "diffusionModel": "wan2.2_ti2v_5B_fp16.safetensors",
-      "textEncoder": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-      "vae": "wan2.2_vae.safetensors",
-      "source": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged (HuggingFace split_files)"
+      "family": "minimax-h3",
+      "variant": "fl2va-pruned-int8",
+      "diffusionModel": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "textEncoder": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "videoVae": "minimax_h3_video_vae_fp16.safetensors",
+      "audioVae": "minimax_h3_audio_vae_fp32.safetensors",
+      "turboLora": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+      "source": "Comfy-Org/MiniMax-H3 + lightx2v/Minimax-h3-Turbo (HuggingFace)",
+      "license": "MiniMax H3 Community License — commercial use permitted under $20M revenue, attribution required",
+      "requiresComfyUi": ">=0.30.0",
+      "vramNote": "diffusion ~21GB + text encoder ~15.7GB resident; target 48GB+ GPUs (L40S / A6000 / RTX 6000 Ada). 24GB cards offload heavily and are much slower."
     },
     "constraints": {
       "dimensionMultiple": 32,
-      "frameQuantum": 4,
-      "frameQuantumOffset": 1,
-      "maxFrames": 121,
-      "minFrames": 9,
+      "frameQuantum": 17,
+      "frameQuantumOffset": 5,
+      "maxFrames": 3600,
+      "minFrames": 5,
       "nativeFps": 24,
-      "note": "Wan VAE compresses 4x temporally (valid lengths are 4k+1) and 32x spatially after patchify. Requests are snapped/clamped by the worker; ~5s @ 24fps is the v1 ceiling — longer briefs are clamped and QC flags DURATION_MISMATCH for human review."
+      "note": "H3 latent lengths are 17k+5 frames. 124 frames ~= 5.2s, 430 ~= 17.9s at 24fps. The worker snaps requested durations onto this grid, so full-length briefs (18s) now render in one pass — no stitching."
+    },
+    "generation": {
+      "steps": 6,
+      "sampler": "res_multistep",
+      "scheduler": "simple",
+      "turboLoraStrength": 1.0,
+      "note": "6 steps with the lightx2v 8-step turbo LoRA at strength 1.0 (the official template's turbo path). Full-quality alternative: set node 5 strength_model to 0 and node 12 steps to 20, at roughly 3x the GPU time."
     },
     "injection": {
-      "product_image": { "node": "6", "input": "image", "note": "worker downloads source_assets[role=product_image] into ComfyUI's input dir and sets the filename here" },
-      "prompt": { "node": "4", "input": "text" },
-      "negative_prompt": { "node": "5", "input": "text" },
-      "seed": { "node": "9", "input": "seed" },
+      "product_image": { "node": "7", "input": "image", "note": "worker downloads source_assets[role=product_image] into ComfyUI's input dir and sets this filename" },
+      "prompt": { "node": "8", "input": "prompt", "note": "H3 takes the prompt directly on the I2V node — there is no separate CLIPTextEncode and no negative-prompt input" },
+      "seed": { "node": "9", "input": "noise_seed" },
       "width": { "node": "8", "input": "width" },
       "height": { "node": "8", "input": "height" },
-      "frame_count": { "node": "8", "input": "length", "note": "frames = snap(duration_seconds * fps) to 4k+1, clamped to [minFrames, maxFrames]" },
-      "fps": { "node": "11", "input": "fps" },
-      "output": { "node": "12", "note": "SaveVideo — the worker collects the mp4 this node writes from ComfyUI history" }
+      "frame_count": { "node": "8", "input": "length", "note": "frames snapped to 17k+5" },
+      "fps": { "node": "16", "input": "fps" },
+      "output": { "node": "17", "note": "SaveVideo — the worker collects the mp4 this node writes from ComfyUI history" }
     }
   },
   "graph": {
     "1": {
       "class_type": "UNETLoader",
       "inputs": {
-        "unet_name": "wan2.2_ti2v_5B_fp16.safetensors",
+        "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
         "weight_dtype": "default"
       }
     },
     "2": {
       "class_type": "CLIPLoader",
       "inputs": {
-        "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-        "type": "wan"
+        "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "type": "minimax",
+        "device": "default"
       }
     },
     "3": {
       "class_type": "VAELoader",
       "inputs": {
-        "vae_name": "wan2.2_vae.safetensors"
+        "vae_name": "minimax_h3_video_vae_fp16.safetensors"
       }
     },
     "4": {
-      "class_type": "CLIPTextEncode",
+      "class_type": "VAELoader",
       "inputs": {
-        "clip": ["2", 0],
-        "text": "Product demonstration video: the product is shown in use, clean studio lighting, smooth camera motion, high detail."
+        "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
       }
     },
     "5": {
-      "class_type": "CLIPTextEncode",
+      "class_type": "LoraLoaderModelOnly",
       "inputs": {
-        "clip": ["2", 0],
-        "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+        "model": ["1", 0],
+        "lora_name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "strength_model": 1.0
       }
     },
-    "6": {
+    "7": {
       "class_type": "LoadImage",
       "inputs": {
         "image": "product.png"
       }
     },
-    "7": {
-      "class_type": "ModelSamplingSD3",
-      "inputs": {
-        "model": ["1", 0],
-        "shift": 8.0
-      }
-    },
     "8": {
-      "class_type": "Wan22ImageToVideoLatent",
+      "class_type": "MiniMaxH3ImageToVideo",
       "inputs": {
+        "clip": ["2", 0],
         "vae": ["3", 0],
+        "first_frame": ["7", 0],
+        "prompt": "Product demonstration video: the product is shown in use, clean studio lighting, smooth camera motion, high detail.",
         "width": 704,
         "height": 1280,
-        "length": 121,
-        "batch_size": 1,
-        "start_image": ["6", 0]
+        "length": 124
       }
     },
     "9": {
-      "class_type": "KSampler",
+      "class_type": "RandomNoise",
       "inputs": {
-        "model": ["7", 0],
-        "positive": ["4", 0],
-        "negative": ["5", 0],
-        "latent_image": ["8", 0],
-        "seed": 0,
-        "steps": 30,
-        "cfg": 5.0,
-        "sampler_name": "uni_pc",
-        "scheduler": "simple",
-        "denoise": 1.0
+        "noise_seed": 0
       }
     },
     "10": {
-      "class_type": "VAEDecode",
+      "class_type": "BasicGuider",
       "inputs": {
-        "samples": ["9", 0],
-        "vae": ["3", 0]
+        "model": ["5", 0],
+        "conditioning": ["8", 0]
       }
     },
     "11": {
-      "class_type": "CreateVideo",
+      "class_type": "KSamplerSelect",
       "inputs": {
-        "images": ["10", 0],
-        "fps": 24
+        "sampler_name": "res_multistep"
       }
     },
     "12": {
+      "class_type": "BasicScheduler",
+      "inputs": {
+        "model": ["5", 0],
+        "scheduler": "simple",
+        "steps": 6,
+        "denoise": 1.0
+      }
+    },
+    "13": {
+      "class_type": "SamplerCustomAdvanced",
+      "inputs": {
+        "noise": ["9", 0],
+        "guider": ["10", 0],
+        "sampler": ["11", 0],
+        "sigmas": ["12", 0],
+        "latent_image": ["8", 1]
+      }
+    },
+    "14": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["13", 0],
+        "vae": ["3", 0]
+      }
+    },
+    "15": {
+      "class_type": "VAEDecodeAudio",
+      "inputs": {
+        "samples": ["13", 0],
+        "vae": ["4", 0]
+      }
+    },
+    "16": {
+      "class_type": "CreateVideo",
+      "inputs": {
+        "images": ["14", 0],
+        "audio": ["15", 0],
+        "fps": 24
+      }
+    },
+    "17": {
       "class_type": "SaveVideo",
       "inputs": {
-        "video": ["11", 0],
+        "video": ["16", 0],
         "filename_prefix": "farm/clip",
-        "format": "mp4",
-        "codec": "h264"
+        "format": "auto",
+        "codec": "auto"
       }
     }
   }

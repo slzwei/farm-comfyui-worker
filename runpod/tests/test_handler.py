@@ -30,7 +30,7 @@ def valid_input(**overrides):
         "contract_version": "1",
         "job_id": "genjob_1",
         "workflow_id": "product-demo-v1",
-        "workflow_version": "1",
+        "workflow_version": "2",
         "prompt": "a product demo",
         "negative_prompt": "",
         "width": 704,
@@ -77,7 +77,7 @@ class TestValidation(unittest.TestCase):
 
 class TestWorkflowLoading(unittest.TestCase):
     def test_loads_bundled_workflow_with_hash(self):
-        doc = handler.load_workflow("product-demo-v1", "1")
+        doc = handler.load_workflow("product-demo-v1", "2")
         self.assertIn("graph", doc)
         self.assertEqual(len(doc["_bundled_hash"]), 64)
 
@@ -88,12 +88,12 @@ class TestWorkflowLoading(unittest.TestCase):
 
     def test_unknown_workflow_fails(self):
         with self.assertRaises(handler.WorkerError) as ctx:
-            handler.load_workflow("not-a-workflow", "1")
+            handler.load_workflow("not-a-workflow", "2")
         self.assertEqual(ctx.exception.code, "WORKFLOW_MISMATCH")
 
     def test_traversal_in_workflow_id_fails(self):
         with self.assertRaises(handler.WorkerError) as ctx:
-            handler.load_workflow("../secrets", "1")
+            handler.load_workflow("../secrets", "2")
         self.assertEqual(ctx.exception.code, "INPUT_INVALID")
 
 
@@ -103,29 +103,29 @@ class TestSnapping(unittest.TestCase):
         self.assertEqual(handler.snap_dimension(1280, 32), 1280)
         self.assertEqual(handler.snap_dimension(31, 32), 32)  # never below one unit
 
-    def test_frames_snap_to_wan_quantum(self):
+    def test_frames_snap_to_h3_quantum(self):
         constraints = {
-            "frameQuantum": 4, "frameQuantumOffset": 1,
-            "minFrames": 9, "maxFrames": 121,
+            "frameQuantum": 17, "frameQuantumOffset": 5,
+            "minFrames": 5, "maxFrames": 3600,
         }
-        # 5s @ 24fps = 120 frames -> nearest 4k+1 = 121
-        self.assertEqual(handler.compute_frames(5, 24, constraints), 121)
-        # 18s brief clamps to the model ceiling
-        self.assertEqual(handler.compute_frames(18, 24, constraints), 121)
+        # 5s @ 24fps = 120 frames -> nearest 17k+5 = 124 (the template default)
+        self.assertEqual(handler.compute_frames(5, 24, constraints), 124)
+        # A full 18s brief now fits in ONE pass — the reason for moving off Wan.
+        self.assertEqual(handler.compute_frames(18, 24, constraints), 430)
         # tiny durations clamp up to the minimum, still on the quantum
         f = handler.compute_frames(0.1, 24, constraints)
-        self.assertGreaterEqual(f, 9)
-        self.assertEqual((f - 1) % 4, 0)
+        self.assertGreaterEqual(f, 5)
+        self.assertEqual((f - 5) % 17, 0)
         # every produced count sits on the quantum
-        for seconds in (1, 2, 3, 4, 5, 7, 10, 18):
+        for seconds in (1, 2, 3, 4, 5, 7, 10, 18, 30):
             f = handler.compute_frames(seconds, 24, constraints)
-            self.assertEqual((f - 1) % 4, 0, f"{seconds}s -> {f}")
-            self.assertLessEqual(f, 121)
+            self.assertEqual((f - 5) % 17, 0, f"{seconds}s -> {f}")
+            self.assertLessEqual(f, 3600)
 
 
 class TestInjection(unittest.TestCase):
     def setUp(self):
-        self.doc = handler.load_workflow("product-demo-v1", "1")
+        self.doc = handler.load_workflow("product-demo-v1", "2")
         self.injection = self.doc["_meta"]["injection"]
 
     def inject(self):
@@ -134,11 +134,11 @@ class TestInjection(unittest.TestCase):
             {
                 "product_image": "genjob_1-abc.png",
                 "prompt": "hero shot of the bottle",
-                "negative_prompt": "blurry",
+                "negative_prompt": "blurry",  # unsupported by H3 — must be skipped
                 "seed": 1234,
                 "width": 704,
                 "height": 1280,
-                "frame_count": 121,
+                "frame_count": 124,
                 "fps": 24,
             },
         )
@@ -149,21 +149,29 @@ class TestInjection(unittest.TestCase):
     def test_semantic_values_land_on_mapped_nodes(self):
         graph = self.inject()
         self.assertEqual(self.node(graph, "product_image")["inputs"]["image"], "genjob_1-abc.png")
-        self.assertEqual(self.node(graph, "prompt")["inputs"]["text"], "hero shot of the bottle")
-        self.assertEqual(self.node(graph, "negative_prompt")["inputs"]["text"], "blurry")
-        self.assertEqual(self.node(graph, "seed")["inputs"]["seed"], 1234)
+        self.assertEqual(self.node(graph, "prompt")["inputs"]["prompt"], "hero shot of the bottle")
+        self.assertEqual(self.node(graph, "seed")["inputs"]["noise_seed"], 1234)
         self.assertEqual(self.node(graph, "width")["inputs"]["width"], 704)
-        self.assertEqual(self.node(graph, "frame_count")["inputs"]["length"], 121)
+        self.assertEqual(self.node(graph, "frame_count")["inputs"]["length"], 124)
         self.assertEqual(self.node(graph, "fps")["inputs"]["fps"], 24)
+
+    def test_unsupported_semantic_is_skipped_not_fatal(self):
+        # H3 has no negative-prompt input; injecting one must not raise and
+        # must not invent a node.
+        graph = self.inject()
+        self.assertNotIn("negative_prompt", self.injection)
+        self.assertEqual(set(graph.keys()), set(self.doc["graph"].keys()))
 
     def test_rest_of_graph_untouched(self):
         graph = self.inject()
-        sampler = self.node(graph, "seed")
-        self.assertEqual(sampler["inputs"]["steps"], 30)
-        self.assertEqual(sampler["inputs"]["cfg"], 5.0)
-        self.assertEqual(sampler["inputs"]["sampler_name"], "uni_pc")
+        info = handler.extract_model_info(graph)
+        self.assertEqual(info["steps"], 6)
+        self.assertEqual(info["sampler"], "res_multistep")
+        self.assertEqual(info["scheduler"], "simple")
         # links survive injection
-        self.assertEqual(sampler["inputs"]["model"], ["7", 0])
+        i2v = self.node(graph, "prompt")
+        self.assertEqual(i2v["inputs"]["clip"], ["2", 0])
+        self.assertEqual(i2v["inputs"]["vae"], ["3", 0])
         # node count unchanged — injection never adds/removes nodes
         self.assertEqual(set(graph.keys()), set(self.doc["graph"].keys()))
 
@@ -172,10 +180,31 @@ class TestInjection(unittest.TestCase):
         self.inject()
         self.assertEqual(json.dumps(self.doc["graph"], sort_keys=True), before)
 
-    def test_unknown_semantic_fails(self):
-        with self.assertRaises(handler.WorkerError) as ctx:
-            handler.inject_workflow_inputs(self.doc, {"lora_strength": 1})
-        self.assertEqual(ctx.exception.code, "WORKFLOW_MISMATCH")
+    def test_unmapped_semantic_is_ignored(self):
+        # Unknown/unsupported semantics are skipped rather than fatal, so one
+        # graph can serve models with different input surfaces.
+        graph = handler.inject_workflow_inputs(self.doc, {"lora_strength": 1})
+        self.assertEqual(set(graph.keys()), set(self.doc["graph"].keys()))
+
+    def test_workflow_missing_a_required_semantic_is_rejected(self):
+        # The safety net that replaces per-injection strictness: a workflow
+        # whose map omits a REQUIRED semantic must fail to load, so a typo
+        # can never silently render with baked-in defaults.
+        import copy as _copy
+        broken = _copy.deepcopy(self.doc)
+        del broken["_meta"]["injection"]["seed"]
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "broken-wf.json"), "w") as f:
+                json.dump(broken, f)
+            old_dir = handler.WORKFLOWS_DIR
+            handler.WORKFLOWS_DIR = tmp
+            try:
+                with self.assertRaises(handler.WorkerError) as ctx:
+                    handler.load_workflow("broken-wf", "2")
+                self.assertEqual(ctx.exception.code, "WORKFLOW_MISMATCH")
+                self.assertIn("seed", str(ctx.exception))
+            finally:
+                handler.WORKFLOWS_DIR = old_dir
 
 
 class TestOutputDiscovery(unittest.TestCase):
@@ -238,13 +267,20 @@ class TestMisc(unittest.TestCase):
         )
 
     def test_extract_model_info_reads_the_real_graph(self):
-        doc = handler.load_workflow("product-demo-v1", "1")
+        doc = handler.load_workflow("product-demo-v1", "2")
         info = handler.extract_model_info(doc["graph"])
-        self.assertEqual(info["models"]["diffusion"], "wan2.2_ti2v_5B_fp16.safetensors")
-        self.assertEqual(info["models"]["vae"], "wan2.2_vae.safetensors")
-        self.assertEqual(info["sampler"], "uni_pc")
-        self.assertEqual(info["steps"], 30)
-        self.assertEqual(info["shift"], 8.0)
+        self.assertEqual(
+            info["models"]["diffusion"], "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+        )
+        self.assertEqual(
+            info["models"]["text_encoder"], "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+        )
+        self.assertEqual(info["models"]["vae"], "minimax_h3_video_vae_fp16.safetensors")
+        # audio VAE is recorded too — H3 generates native sound
+        self.assertIn("minimax_h3_audio_vae_fp32.safetensors", info["models"]["vae_extra"])
+        self.assertEqual(info["models"]["loras"][0]["strength"], 1.0)
+        self.assertEqual(info["sampler"], "res_multistep")
+        self.assertEqual(info["steps"], 6)
 
 
 if __name__ == "__main__":

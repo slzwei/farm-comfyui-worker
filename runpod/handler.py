@@ -46,6 +46,10 @@ MAX_ASSET_BYTES = int(os.environ.get("MAX_ASSET_BYTES", str(50 * 1024 * 1024)))
 MAX_BASE64_BYTES = int(os.environ.get("MAX_BASE64_BYTES", str(12 * 1024 * 1024)))
 
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
+
+# Semantics every approved workflow must map. Others (negative_prompt, fps)
+# are model-dependent and are skipped when absent.
+REQUIRED_INJECTION = ("product_image", "prompt", "seed", "width", "height", "frame_count", "output")
 IMAGE_CONTENT_EXT = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -156,6 +160,13 @@ def load_workflow(workflow_id: str, workflow_version: str, workflow_hash=None) -
             caller_hash=workflow_hash,
             bundled_hash=bundled_hash,
         )
+    injection = meta.get("injection") or {}
+    missing = [s for s in REQUIRED_INJECTION if s not in injection]
+    if missing:
+        raise WorkerError(
+            "WORKFLOW_MISMATCH",
+            f"{workflow_id} injection map is missing required semantics: {', '.join(missing)}",
+        )
     doc["_bundled_hash"] = bundled_hash
     return doc
 
@@ -187,9 +198,11 @@ def inject_workflow_inputs(workflow_doc: dict, values: dict) -> dict:
     for semantic, value in values.items():
         target = injection.get(semantic)
         if not target:
-            raise WorkerError(
-                "WORKFLOW_MISMATCH", f"workflow has no injection target for {semantic!r}"
-            )
+            # Not every model exposes every semantic input — MiniMax H3, for
+            # example, has no negative-prompt field. Skipping is correct;
+            # a REQUIRED semantic missing is caught by validate_injection().
+            log("semantic not supported by this workflow, skipping", semantic=semantic)
+            continue
         node = graph.get(target["node"])
         if node is None or target.get("input") is None:
             raise WorkerError(
@@ -402,8 +415,13 @@ def gpu_name():
 
 
 def extract_model_info(graph: dict) -> dict:
+    """Reproducibility record: which weights and sampler settings actually
+    produced this clip. Covers both the classic KSampler graphs and the
+    SamplerCustomAdvanced style (KSamplerSelect + BasicScheduler) that the
+    MiniMax H3 workflows use."""
     models = {}
     sampling = {}
+    vaes = []
     for node in graph.values():
         ct = node.get("class_type")
         inputs = node.get("inputs", {})
@@ -412,10 +430,10 @@ def extract_model_info(graph: dict) -> dict:
         elif ct == "CLIPLoader":
             models["text_encoder"] = inputs.get("clip_name")
         elif ct == "VAELoader":
-            models["vae"] = inputs.get("vae_name")
+            vaes.append(inputs.get("vae_name"))
         elif ct == "CheckpointLoaderSimple":
             models["checkpoint"] = inputs.get("ckpt_name")
-        elif ct == "LoraLoader":
+        elif ct in ("LoraLoader", "LoraLoaderModelOnly"):
             models.setdefault("loras", []).append(
                 {"name": inputs.get("lora_name"), "strength": inputs.get("strength_model")}
             )
@@ -426,8 +444,23 @@ def extract_model_info(graph: dict) -> dict:
                 steps=inputs.get("steps"),
                 cfg=inputs.get("cfg"),
             )
+        elif ct == "KSamplerSelect":
+            sampling["sampler"] = inputs.get("sampler_name")
+        elif ct == "BasicScheduler":
+            sampling.update(
+                scheduler=inputs.get("scheduler"),
+                steps=inputs.get("steps"),
+                denoise=inputs.get("denoise"),
+            )
         elif ct == "ModelSamplingSD3":
             sampling["shift"] = inputs.get("shift")
+        elif ct == "MiniMaxH3SigmaShift":
+            sampling["shift_video"] = inputs.get("shift_video")
+            sampling["shift_audio"] = inputs.get("shift_audio")
+    if vaes:
+        models["vae"] = vaes[0]
+        if len(vaes) > 1:
+            models["vae_extra"] = vaes[1:]
     return {"models": models, **sampling}
 
 
