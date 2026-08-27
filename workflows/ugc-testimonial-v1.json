@@ -1,7 +1,7 @@
 {
   "_meta": {
     "workflowId": "ugc-testimonial-v1",
-    "version": "2",
+    "version": "3",
     "status": "ACTIVE",
     "description": "UGC/creator shot on MiniMax H3 Ref2VA. Takes TWO references: the locked creator identity (ref_image_0) and the product (ref_image_1), so every video features the SAME recognisable presenter holding the real packaging. Identity consistency is what turns a pile of clips into a channel \u2014 viewers must recognise her.",
     "model": {
@@ -29,7 +29,7 @@
       "sampler": "res_multistep",
       "scheduler": "simple",
       "turboLoraStrength": 1.0,
-      "note": "4 steps with the ref2v 4-step turbo LoRA (the official r2v template's turbo path). Full quality: node 5 strength 0 and node 12 steps 20."
+      "note": "Defaults are the fast turbo path (4 steps, LoRA 1.0). For realistic, less plastic output pass parameters.steps=20 and parameters.lora_strength=0 \u2014 roughly 5x the GPU time but materially better skin and motion. The turbo LoRA is the main cause of the 'AI look'."
     },
     "injection": {
       "creator_image": {
@@ -68,6 +68,16 @@
       },
       "output": {
         "node": "17"
+      },
+      "steps": {
+        "node": "12",
+        "input": "steps",
+        "note": "sampling steps; 4 with turbo LoRA, 20+ for realism"
+      },
+      "lora_strength": {
+        "node": "5",
+        "input": "strength_model",
+        "note": "turbo LoRA strength; 0 disables it for full quality"
       }
     },
     "creator": {

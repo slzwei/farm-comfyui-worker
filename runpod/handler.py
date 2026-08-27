@@ -518,6 +518,13 @@ def handler(event):
         }
         if creator_asset:
             injections["creator_image"] = creator_asset["filename"]
+        # Numeric quality overrides (steps, lora_strength) travel in
+        # parameters; injected only when the workflow maps them, so old
+        # workflows are unaffected.
+        params = inp.get("parameters") or {}
+        for name in ("steps", "lora_strength"):
+            if isinstance(params.get(name), (int, float)):
+                injections[name] = params[name]
         graph = inject_workflow_inputs(workflow_doc, injections)
 
         t0 = time.time()
